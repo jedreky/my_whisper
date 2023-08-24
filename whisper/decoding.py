@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from .model import Whisper
 
 
-from src.utils import print_top_k
+from src.utils import TMP_TENSOR_FILE
 
 
 @torch.no_grad()
@@ -551,6 +551,7 @@ class DecodingTask:
 
         # logit filters: applies various rules to suppress or penalize certain tokens
         self.logit_filters = []
+        # breakpoint()
         if self.options.suppress_blank:
             self.logit_filters.append(SuppressBlank(self.tokenizer, self.sample_begin))
         if self.options.suppress_tokens:
@@ -684,14 +685,18 @@ class DecodingTask:
 
         # breakpoint()
 
+        tensor_list = []
+
         try:
             # this loops over the maximal number of tokens to sample, but usually it terminates early
             for i in range(self.sample_len):
                 # ok, so here we always pass it the same audio_features, but since we also pass the current list of tokens
                 # the code will figure out where we are in the audio and give us predictino for the first not-yet-predicted word
                 # I don't yet know what the shape of the audio feature means, but the audio feature is constant
-                print(f"Iteration {i}, {audio_features.shape}")
+                # print(f"Iteration {i}, {audio_features.shape}")
+                print(f"Current tokens: {tokens}")
                 logits = self.inference.logits(tokens, audio_features)
+                print(logits.shape)
 
                 if i == 0:
                     template = audio_features
@@ -709,13 +714,13 @@ class DecodingTask:
                 # now we need to consider the logits at the last token only
                 # this is where we see the probabilities!
                 logits = logits[:, -1]
+                tensor_list.append(logits)
                 # my_tokens = print_top_k(logits, k=10)
                 # comment = "These are top options:"
                 # for x in my_tokens:
                 #     comment += self.tokenizer.decode([x]) + ","
-
+                #
                 # print(comment)
-                # breakpoint()
 
                 # apply the logit filters, e.g. for suppressing or applying penalty to
                 for logit_filter in self.logit_filters:
@@ -729,6 +734,10 @@ class DecodingTask:
                     break
         finally:
             self.inference.cleanup_caching()
+            full_tensor = torch.stack(tensor_list, dim=1)
+            print(full_tensor.shape)
+            torch.save(full_tensor, TMP_TENSOR_FILE)
+
 
         return tokens, sum_logprobs, no_speech_probs
 
@@ -759,9 +768,8 @@ class DecodingTask:
         tokens = tokens.repeat_interleave(self.n_group, dim=0).to(audio_features.device)
 
         # call the main sampling loop
-        print(f"At this point we have the following tokens: {tokens}")
-        print("According to the paper they correspond to: start-of-transcript, english language and transcribe task")
-        # breakpoint()
+        # print(f"At this point we have the following tokens: {tokens}")
+        # print("According to the paper they correspond to: start-of-transcript, english language and transcribe task")
         tokens, sum_logprobs, no_speech_probs = self._main_loop(audio_features, tokens)
 
         # reshape the tensors to have (n_audio, n_group) as the first two dimensions

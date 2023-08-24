@@ -147,6 +147,7 @@ def load_model(
     dims = ModelDimensions(**checkpoint["dims"])
     print(dims)
     model = Whisper(dims)
+    # breakpoint()
     model.load_state_dict(checkpoint["model_state_dict"])
 
     if alignment_heads is not None:

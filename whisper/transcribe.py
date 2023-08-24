@@ -156,6 +156,7 @@ def transcribe(
         temperatures = (
             [temperature] if isinstance(temperature, (int, float)) else temperature
         )
+        print(f"Temperatures: {temperatures}")
         decode_result = None
 
         for t in temperatures:
