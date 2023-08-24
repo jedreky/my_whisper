@@ -145,6 +145,7 @@ def load_model(
     del checkpoint_file
 
     dims = ModelDimensions(**checkpoint["dims"])
+    print(dims)
     model = Whisper(dims)
     model.load_state_dict(checkpoint["model_state_dict"])
 

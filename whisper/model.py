@@ -141,10 +141,16 @@ class ResidualAttentionBlock(nn.Module):
 
 
 class AudioEncoder(nn.Module):
+    # JK: encoder structure
     def __init__(
         self, n_mels: int, n_ctx: int, n_state: int, n_head: int, n_layer: int
     ):
         super().__init__()
+        # print(f"n_mels = {n_mels}")
+        # print(f"n_ctx = {n_ctx}")
+        # print(f"n_state = {n_state}")
+        # print(f"n_head = {n_head}")
+        # print(f"n_layer = {n_layer}")
         self.conv1 = Conv1d(n_mels, n_state, kernel_size=3, padding=1)
         self.conv2 = Conv1d(n_state, n_state, kernel_size=3, stride=2, padding=1)
         self.register_buffer("positional_embedding", sinusoids(n_ctx, n_state))
@@ -166,6 +172,7 @@ class AudioEncoder(nn.Module):
         assert x.shape[1:] == self.positional_embedding.shape, "incorrect audio shape"
         x = (x + self.positional_embedding).to(x.dtype)
 
+        print(f"Number of blocks: {len(self.blocks)}")
         for block in self.blocks:
             x = block(x)
 
@@ -174,11 +181,11 @@ class AudioEncoder(nn.Module):
 
 
 class TextDecoder(nn.Module):
+    # JK: decoder structure
     def __init__(
         self, n_vocab: int, n_ctx: int, n_state: int, n_head: int, n_layer: int
     ):
         super().__init__()
-
         self.token_embedding = nn.Embedding(n_vocab, n_state)
         self.positional_embedding = nn.Parameter(torch.empty(n_ctx, n_state))
 
@@ -200,17 +207,34 @@ class TextDecoder(nn.Module):
         xa : torch.Tensor, shape = (batch_size, n_mels, n_audio_ctx)
             the encoded audio features to be attended on
         """
+        # breakpoint()
+        # x is the just the last token, while xa is the audio_feature
+        print(f"Last token: {x}")
         offset = next(iter(kv_cache.values())).shape[1] if kv_cache else 0
+        # here we compute token embeddings (embedding dimension is referred to as width in the paper dims)
+        # and add to positional embeddings
         x = (
             self.token_embedding(x)
             + self.positional_embedding[offset : offset + x.shape[-1]]
         )
+        # here ensure that x and xa have the same dtype
         x = x.to(xa.dtype)
 
+        # here we put it through all the blocks, I believe dimension stays the same
+        orig_shape = x.shape
         for block in self.blocks:
             x = block(x, xa, mask=self.mask, kv_cache=kv_cache)
 
+        if x.shape != orig_shape:
+            breakpoint()
+
+        # here we do layer normalisation
+        # breakpoint()
         x = self.ln(x)
+
+
+        # until now the last dimension of the output is the embedding dimension
+        # by taking this inner product we convert it to the number of tokens
         logits = (
             x @ torch.transpose(self.token_embedding.weight.to(x.dtype), 0, 1)
         ).float()
@@ -219,6 +243,7 @@ class TextDecoder(nn.Module):
 
 
 class Whisper(nn.Module):
+    # JK: main model definition
     def __init__(self, dims: ModelDimensions):
         super().__init__()
         self.dims = dims
@@ -261,6 +286,8 @@ class Whisper(nn.Module):
     def forward(
         self, mel: torch.Tensor, tokens: torch.Tensor
     ) -> Dict[str, torch.Tensor]:
+        # this is actually never used!
+        breakpoint()
         return self.decoder(tokens, self.encoder(mel))
 
     @property
@@ -304,6 +331,9 @@ class Whisper(nn.Module):
         self.decoder.apply(install_hooks)
         return cache, hooks
 
+
     detect_language = detect_language_function
     transcribe = transcribe_function
     decode = decode_function
+
+
