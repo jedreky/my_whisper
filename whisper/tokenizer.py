@@ -7,6 +7,9 @@ from typing import Dict, List, Optional, Tuple
 
 import tiktoken
 
+from src.utils import TMP_SPECIAL_TOKENS_FILE, TMP_STANDARD_TOKENS_FILE
+
+# JK: languages and abbreviations
 LANGUAGES = {
     "en": "english",
     "zh": "chinese",
@@ -145,7 +148,13 @@ class Tokenizer:
         translate: int = self.special_tokens["<|translate|>"]
         transcribe: int = self.special_tokens["<|transcribe|>"]
 
+        special_tokens_ordered = sorted([ f"{val}: {key}" for key, val in self.special_tokens.items() ])
+
+        with open(TMP_SPECIAL_TOKENS_FILE, "w") as f:
+            f.write("\n".join(special_tokens_ordered))
+
         langs = tuple(LANGUAGES.keys())
+        # this is where the start-of-text sequence is generated
         sot_sequence = [sot]
         if self.language is not None:
             sot_sequence.append(sot + 1 + langs.index(self.language))
@@ -323,11 +332,26 @@ class Tokenizer:
 
 @lru_cache(maxsize=None)
 def get_encoding(name: str = "gpt2"):
+    # JK: vocabulary is read from file and special tokens are added
     vocab_path = os.path.join(os.path.dirname(__file__), "assets", f"{name}.tiktoken")
     ranks = {
         base64.b64decode(token): int(rank)
         for token, rank in (line.split() for line in open(vocab_path) if line)
     }
+
+    standard_tokens = []
+
+    for key, val in ranks.items():
+        try:
+            key_printable = str(key, 'utf-8')
+        except UnicodeDecodeError:
+            key_printable = key
+
+        standard_tokens.append(f"{val}: {key_printable}")
+
+    with open(TMP_STANDARD_TOKENS_FILE, "w") as f:
+        f.write("\n".join(standard_tokens))
+
     n_vocab = len(ranks)
     special_tokens = {}
 
@@ -344,6 +368,7 @@ def get_encoding(name: str = "gpt2"):
         *[f"<|{i * 0.02:.2f}|>" for i in range(1501)],
     ]
 
+    # special tokens are added to the vocabulary under consecutive integers
     for token in specials:
         special_tokens[token] = n_vocab
         n_vocab += 1

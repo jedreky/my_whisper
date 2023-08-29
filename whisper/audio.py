@@ -140,18 +140,17 @@ def log_mel_spectrogram(
             audio = load_audio(audio)
         audio = torch.from_numpy(audio)
 
-    print("Audio shape before padding")
-    print(audio.shape)
+    # print("Audio shape before padding")
+    # print(audio.shape)
 
     if device is not None:
         audio = audio.to(device)
     if padding > 0:
         audio = F.pad(audio, (0, padding))
 
-    print("Audio shape after padding")
-    print(audio.shape)
+    # print("Audio shape after padding")
+    # print(audio.shape)
 
-    # breakpoint()
     window = torch.hann_window(N_FFT).to(audio.device)
     stft = torch.stft(audio, N_FFT, HOP_LENGTH, window=window, return_complex=True)
     magnitudes = stft[..., :-1].abs() ** 2

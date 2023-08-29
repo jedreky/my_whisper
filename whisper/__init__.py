@@ -99,6 +99,7 @@ def load_model(
     device: Optional[Union[str, torch.device]] = None,
     download_root: str = None,
     in_memory: bool = False,
+    private_use=False,
 ) -> Whisper:
     """
     Load a Whisper ASR model
@@ -145,12 +146,17 @@ def load_model(
     del checkpoint_file
 
     dims = ModelDimensions(**checkpoint["dims"])
-    print(dims)
     model = Whisper(dims)
-    # breakpoint()
+
+    # dirty hack because the positional embeddings stored in the checkpoint are inaccurate
+    checkpoint["model_state_dict"].pop("encoder.positional_embedding")
+
     model.load_state_dict(checkpoint["model_state_dict"])
 
     if alignment_heads is not None:
         model.set_alignment_heads(alignment_heads)
 
-    return model.to(device)
+    if private_use:
+        return checkpoint
+    else:
+        return model.to(device)

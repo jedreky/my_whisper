@@ -278,18 +278,35 @@ class GreedyDecoder(TokenDecoder):
     def update(
         self, tokens: Tensor, logits: Tensor, sum_logprobs: Tensor
     ) -> Tuple[Tensor, bool]:
+
         if self.temperature == 0:
+            # if temperature is zero, pick the most likely token
             next_tokens = logits.argmax(dim=-1)
         else:
+            # if temperature non-zero, sample from the distribution
             next_tokens = Categorical(logits=logits / self.temperature).sample()
 
         logprobs = F.log_softmax(logits.float(), dim=-1)
         current_logprobs = logprobs[torch.arange(logprobs.shape[0]), next_tokens]
         sum_logprobs += current_logprobs * (tokens[:, -1] != self.eot)
 
+        # print(f"Tokens: {tokens}")
+        # print(f"Before: {next_tokens}")
+
+        orig_tokens = torch.clone(next_tokens)
+
+        # I do not know what this line does:
         next_tokens[tokens[:, -1] == self.eot] = self.eot
+
+        if orig_tokens != next_tokens:
+            breakpoint()
+
+
+        # Here we concatenate new tokens
         tokens = torch.cat([tokens, next_tokens[:, None]], dim=-1)
 
+        # here we check whether the last new tokens is EOT
+        # .all() is a bit misleading, since this is always a tensor of size 1
         completed = (tokens[:, -1] == self.eot).all()
         return tokens, completed
 
@@ -541,7 +558,6 @@ class DecodingTask:
         self.sequence_ranker = MaximumLikelihoodRanker(options.length_penalty)
 
         # decoder: implements how to select the next tokens, given the autoregressive distribution
-        # breakpoint()
         if options.beam_size is not None:
             self.decoder = BeamSearchDecoder(
                 options.beam_size, tokenizer.eot, self.inference, options.patience
@@ -551,7 +567,7 @@ class DecodingTask:
 
         # logit filters: applies various rules to suppress or penalize certain tokens
         self.logit_filters = []
-        # breakpoint()
+
         if self.options.suppress_blank:
             self.logit_filters.append(SuppressBlank(self.tokenizer, self.sample_begin))
         if self.options.suppress_tokens:
@@ -683,8 +699,6 @@ class DecodingTask:
         sum_logprobs: Tensor = torch.zeros(n_batch, device=audio_features.device)
         no_speech_probs = [np.nan] * n_batch
 
-        # breakpoint()
-
         tensor_list = []
 
         try:
@@ -696,7 +710,7 @@ class DecodingTask:
                 # print(f"Iteration {i}, {audio_features.shape}")
                 print(f"Current tokens: {tokens}")
                 logits = self.inference.logits(tokens, audio_features)
-                print(logits.shape)
+                print(f"Logits shape: {logits.shape}")
 
                 if i == 0:
                     template = audio_features
@@ -714,6 +728,7 @@ class DecodingTask:
                 # now we need to consider the logits at the last token only
                 # this is where we see the probabilities!
                 logits = logits[:, -1]
+                print(f"Logits final shape: {logits.shape}")
                 tensor_list.append(logits)
                 # my_tokens = print_top_k(logits, k=10)
                 # comment = "These are top options:"
@@ -737,7 +752,6 @@ class DecodingTask:
             full_tensor = torch.stack(tensor_list, dim=1)
             print(full_tensor.shape)
             torch.save(full_tensor, TMP_TENSOR_FILE)
-
 
         return tokens, sum_logprobs, no_speech_probs
 
