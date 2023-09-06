@@ -34,8 +34,6 @@ class LayerNorm(nn.LayerNorm):
 
 class Linear(nn.Linear):
     def forward(self, x: Tensor) -> Tensor:
-        # if x.shape == torch.Size([1, 1, 384]):
-        #     breakpoint()
         return F.linear(
             x,
             self.weight.to(x.dtype),
@@ -62,14 +60,9 @@ def sinusoids(length, channels, max_timescale=10000):
 
 
 class MultiHeadAttention(nn.Module):
-    # JK: definition of MultiHeadAttention
     def __init__(self, n_state: int, n_head: int):
         super().__init__()
         self.n_head = n_head
-        self.n_state = n_state
-
-        # JK: these are 3 linear transformations that map the input to
-        # query, key and value vectors, respectively
         self.query = Linear(n_state, n_state)
         self.key = Linear(n_state, n_state, bias=False)
         self.value = Linear(n_state, n_state)
@@ -82,14 +75,8 @@ class MultiHeadAttention(nn.Module):
         mask: Optional[Tensor] = None,
         kv_cache: Optional[dict] = None,
     ):
-        # if x.shape[1] == 1:
-        #     breakpoint()
-        # if xa is not None:
-        #     breakpoint()
-        # compute query vector
         q = self.query(x)
 
-        # if not cached, compute key and value vector
         if kv_cache is None or xa is None or self.key not in kv_cache:
             # hooks, if installed (i.e. kv_cache is not None), will prepend the cached kv tensors;
             # otherwise, perform key/value projections for self- or cross-attention as usual.
@@ -106,36 +93,22 @@ class MultiHeadAttention(nn.Module):
     def qkv_attention(
         self, q: Tensor, k: Tensor, v: Tensor, mask: Optional[Tensor] = None
     ):
-        # JK: this is where attention is computed
         n_batch, n_ctx, n_state = q.shape
         scale = (n_state // self.n_head) ** -0.25
-        # if mask is not None:
-        #     breakpoint()
         q = q.view(*q.shape[:2], self.n_head, -1).permute(0, 2, 1, 3) * scale
         k = k.view(*k.shape[:2], self.n_head, -1).permute(0, 2, 3, 1) * scale
         v = v.view(*v.shape[:2], self.n_head, -1).permute(0, 2, 1, 3)
 
         qk = q @ k
-        # print(f"Early shapes, q: {q.shape},k: {k.shape}, v: {v.shape}")
-        # print(f"Shape after multiplication: {qk.shape}")
-
         if mask is not None:
-            # print(f"Shapes: {qk.shape}, {mask.shape}, {n_ctx}")
-            qk_orig = qk.clone()
             qk = qk + mask[:n_ctx, :n_ctx]
-
-            # if not torch.equal(qk, qk_orig):
-            #     breakpoint()
-
         qk = qk.float()
 
         w = F.softmax(qk, dim=-1).to(q.dtype)
-        # this is where convex combination of values is computed and then flattened
         return (w @ v).permute(0, 2, 1, 3).flatten(start_dim=2), qk.detach()
 
 
 class ResidualAttentionBlock(nn.Module):
-    # JK: ResidualAttentionBlock definition
     def __init__(self, n_state: int, n_head: int, cross_attention: bool = False):
         super().__init__()
 
@@ -160,38 +133,21 @@ class ResidualAttentionBlock(nn.Module):
         mask: Optional[Tensor] = None,
         kv_cache: Optional[dict] = None,
     ):
-        # if xa is not None:
-        #     breakpoint()
-
-        # print(x.shape)
         x = x + self.attn(self.attn_ln(x), mask=mask, kv_cache=kv_cache)[0]
-        # print(x.shape)
-
         if self.cross_attn:
             x = x + self.cross_attn(self.cross_attn_ln(x), xa, kv_cache=kv_cache)[0]
-            # print(x.shape)
-
         x = x + self.mlp(self.mlp_ln(x))
         return x
 
 
 class AudioEncoder(nn.Module):
-    # JK: encoder structure
     def __init__(
         self, n_mels: int, n_ctx: int, n_state: int, n_head: int, n_layer: int
     ):
         super().__init__()
-        # print(f"n_mels = {n_mels}")
-        # print(f"n_ctx = {n_ctx}")
-        # print(f"n_state = {n_state}")
-        # print(f"n_head = {n_head}")
-        # print(f"n_layer = {n_layer}")
         self.conv1 = Conv1d(n_mels, n_state, kernel_size=3, padding=1)
         self.conv2 = Conv1d(n_state, n_state, kernel_size=3, stride=2, padding=1)
-
-        # dirty hack because the positional embeddings stored in the checkpoint are inaccurate
-        # self.register_buffer("positional_embedding", sinusoids(n_ctx, n_state))
-        self.positional_embedding = sinusoids(n_ctx, n_state)
+        self.register_buffer("positional_embedding", sinusoids(n_ctx, n_state))
 
         self.blocks: Iterable[ResidualAttentionBlock] = nn.ModuleList(
             [ResidualAttentionBlock(n_state, n_head) for _ in range(n_layer)]
@@ -203,11 +159,10 @@ class AudioEncoder(nn.Module):
         x : torch.Tensor, shape = (batch_size, n_mels, n_ctx)
             the mel spectrogram of the audio
         """
-
         x = F.gelu(self.conv1(x))
         x = F.gelu(self.conv2(x))
-
         x = x.permute(0, 2, 1)
+
         assert x.shape[1:] == self.positional_embedding.shape, "incorrect audio shape"
         x = (x + self.positional_embedding).to(x.dtype)
 
@@ -219,14 +174,12 @@ class AudioEncoder(nn.Module):
 
 
 class TextDecoder(nn.Module):
-    # JK: decoder structure
     def __init__(
         self, n_vocab: int, n_ctx: int, n_state: int, n_head: int, n_layer: int
     ):
         super().__init__()
-        # JK: this is the layer that provides token embeddings
+
         self.token_embedding = nn.Embedding(n_vocab, n_state)
-        # JK: this is the layer that provides learnt positional encodings
         self.positional_embedding = nn.Parameter(torch.empty(n_ctx, n_state))
 
         self.blocks: Iterable[ResidualAttentionBlock] = nn.ModuleList(
@@ -240,57 +193,32 @@ class TextDecoder(nn.Module):
         mask = torch.empty(n_ctx, n_ctx).fill_(-np.inf).triu_(1)
         self.register_buffer("mask", mask, persistent=False)
 
-    def forward(self, x: Tensor, xa: Tensor, kv_cache: Optional[dict] = None, return_embedding=False):
+    def forward(self, x: Tensor, xa: Tensor, kv_cache: Optional[dict] = None):
         """
         x : torch.LongTensor, shape = (batch_size, <= n_ctx)
             the text tokens
         xa : torch.Tensor, shape = (batch_size, n_mels, n_audio_ctx)
             the encoded audio features to be attended on
         """
-        # x is the just the last token, while xa is the audio_feature
-        # print(f"Tokens (from inside TextDecoder.forward): {x}, {x.shape}")
         offset = next(iter(kv_cache.values())).shape[1] if kv_cache else 0
-        # print(f"Offset: {offset}")
-
-        # here we compute token embeddings (embedding dimension is referred to as width in the paper dims)
-        # and add to positional embeddings
-
-
         x = (
-            self.token_embedding(x) + self.positional_embedding[offset : offset + x.shape[-1]]
+            self.token_embedding(x)
+            + self.positional_embedding[offset : offset + x.shape[-1]]
         )
-        # here ensure that x and xa have the same dtype
         x = x.to(xa.dtype)
-        # print(f"Shape after token and positional embedding: {x.shape}")
-
-        # here we put it through all the blocks, I believe dimension stays the same
-        orig_shape = x.shape
 
         for block in self.blocks:
             x = block(x, xa, mask=self.mask, kv_cache=kv_cache)
 
-        if x.shape != orig_shape:
-            breakpoint()
-
-        # here we do layer normalisation
         x = self.ln(x)
-
-        # until now the last dimension of the output is the embedding dimension
-        # by taking this inner product we convert it to the number of tokens
         logits = (
             x @ torch.transpose(self.token_embedding.weight.to(x.dtype), 0, 1)
         ).float()
 
-        if return_embedding:
-            # if required return both the logits and the predicted embedding
-            return logits, x
-        else:
-            # otherwise just the logits
-            return logits
+        return logits
 
 
 class Whisper(nn.Module):
-    # JK: main model definition
     def __init__(self, dims: ModelDimensions):
         super().__init__()
         self.dims = dims
@@ -328,13 +256,11 @@ class Whisper(nn.Module):
         return self.encoder(mel)
 
     def logits(self, tokens: torch.Tensor, audio_features: torch.Tensor):
-        print(f"fn: logits, {tokens}, {audio_features.shape}")
         return self.decoder(tokens, audio_features)
 
     def forward(
         self, mel: torch.Tensor, tokens: torch.Tensor
     ) -> Dict[str, torch.Tensor]:
-        # this is actually never used!
         return self.decoder(tokens, self.encoder(mel))
 
     @property
@@ -367,7 +293,6 @@ class Whisper(nn.Module):
                 # save as-is, for the first token or cross attention
                 cache[module] = output
             else:
-                # concatenate for subsequent tokens in self-attention
                 cache[module] = torch.cat([cache[module], output], dim=1).detach()
             return cache[module]
 
@@ -382,5 +307,3 @@ class Whisper(nn.Module):
     detect_language = detect_language_function
     transcribe = transcribe_function
     decode = decode_function
-
-

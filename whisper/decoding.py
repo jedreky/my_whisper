@@ -15,9 +15,6 @@ if TYPE_CHECKING:
     from .model import Whisper
 
 
-from src.utils import TMP_TENSOR_FILE
-
-
 @torch.no_grad()
 def detect_language(
     model: "Whisper", mel: Tensor, tokenizer: Tokenizer = None
@@ -157,11 +154,9 @@ class PyTorchInference(Inference):
         if not self.kv_cache:
             self.kv_cache, self.hooks = self.model.install_kv_cache_hooks()
 
-        # print(f"Tokens shape in logits fn: {tokens.shape}")
         if tokens.shape[-1] > self.initial_token_length:
             # only need to use the last token except in the first forward pass
             tokens = tokens[:, -1:]
-            # print(f"Tokens shape in logits fn after truncation: {tokens.shape}")
 
         return self.model.decoder(tokens, audio_features, kv_cache=self.kv_cache)
 
@@ -280,35 +275,18 @@ class GreedyDecoder(TokenDecoder):
     def update(
         self, tokens: Tensor, logits: Tensor, sum_logprobs: Tensor
     ) -> Tuple[Tensor, bool]:
-
         if self.temperature == 0:
-            # if temperature is zero, pick the most likely token
             next_tokens = logits.argmax(dim=-1)
         else:
-            # if temperature non-zero, sample from the distribution
             next_tokens = Categorical(logits=logits / self.temperature).sample()
 
         logprobs = F.log_softmax(logits.float(), dim=-1)
         current_logprobs = logprobs[torch.arange(logprobs.shape[0]), next_tokens]
         sum_logprobs += current_logprobs * (tokens[:, -1] != self.eot)
 
-        # print(f"Tokens: {tokens}")
-        # print(f"Before: {next_tokens}")
-
-        orig_tokens = torch.clone(next_tokens)
-
-        # I do not know what this line does:
         next_tokens[tokens[:, -1] == self.eot] = self.eot
-
-        if orig_tokens != next_tokens:
-            breakpoint()
-
-
-        # Here we concatenate new tokens
         tokens = torch.cat([tokens, next_tokens[:, None]], dim=-1)
 
-        # here we check whether the last new tokens is EOT
-        # .all() is a bit misleading, since this is always a tensor of size 1
         completed = (tokens[:, -1] == self.eot).all()
         return tokens, completed
 
@@ -569,7 +547,6 @@ class DecodingTask:
 
         # logit filters: applies various rules to suppress or penalize certain tokens
         self.logit_filters = []
-
         if self.options.suppress_blank:
             self.logit_filters.append(SuppressBlank(self.tokenizer, self.sample_begin))
         if self.options.suppress_tokens:
@@ -671,7 +648,6 @@ class DecodingTask:
             audio_features = mel
         else:
             audio_features = self.model.encoder(mel)
-            # print(f"Encoder: {mel.shape} -> {audio_features.shape}")
 
         if audio_features.dtype != (
             torch.float16 if self.options.fp16 else torch.float32
@@ -701,25 +677,9 @@ class DecodingTask:
         sum_logprobs: Tensor = torch.zeros(n_batch, device=audio_features.device)
         no_speech_probs = [np.nan] * n_batch
 
-        tensor_list = []
-
         try:
-            # this loops over the maximal number of tokens to sample, but usually it terminates early
             for i in range(self.sample_len):
-                # ok, so here we always pass it the same audio_features, but since we also pass the current list of tokens
-                # the code will figure out where we are in the audio and give us predictino for the first not-yet-predicted word
-                # I don't yet know what the shape of the audio feature means, but the audio feature is constant
-                # print(f"Iteration {i}, {audio_features.shape}")
-                # print(f"Current tokens (inside loop in _main_loop): {tokens}")
                 logits = self.inference.logits(tokens, audio_features)
-                # print(f"Logits shape returned from inference.logits: {logits.shape}")
-
-                if i == 0:
-                    template = audio_features
-                else:
-                    norm = np.linalg.norm(audio_features.numpy() - template.numpy())
-                    if norm > 1e-5:
-                        breakpoint()
 
                 if (
                     i == 0 and self.tokenizer.no_speech is not None
@@ -728,35 +688,19 @@ class DecodingTask:
                     no_speech_probs = probs_at_sot[:, self.tokenizer.no_speech].tolist()
 
                 # now we need to consider the logits at the last token only
-                # this is where we see the probabilities!
-                tensor_list.append(logits.clone())
                 logits = logits[:, -1]
-                # print(f"Logits shape truncated to the last token: {logits.shape}")
-
-                # my_tokens = print_top_k(logits, k=10)
-                # comment = "These are top options:"
-                # for x in my_tokens:
-                #     comment += self.tokenizer.decode([x]) + ","
-                #
-                # print(comment)
 
                 # apply the logit filters, e.g. for suppressing or applying penalty to
-                # print(f"Apply filters, tokens: {tokens}, logits shape: {logits.shape}")
                 for logit_filter in self.logit_filters:
                     logit_filter.apply(logits, tokens)
 
                 # expand the tokens tensor with the selected next tokens
-                # this is where the best token is added to the sequence
                 tokens, completed = self.decoder.update(tokens, logits, sum_logprobs)
 
                 if completed or tokens.shape[-1] > self.n_ctx:
                     break
         finally:
             self.inference.cleanup_caching()
-            full_tensor = torch.cat(tensor_list, dim=1)
-            print(tokens)
-            print(full_tensor.shape)
-            torch.save(full_tensor, TMP_TENSOR_FILE)
 
         return tokens, sum_logprobs, no_speech_probs
 
@@ -766,11 +710,7 @@ class DecodingTask:
         tokenizer: Tokenizer = self.tokenizer
         n_audio: int = mel.shape[0]
 
-        # JK: encoder forward pass, convert mel to audio_features
-        # print(f"Mel shape inside run fn: {mel.shape}")
-        # print("\nEncoder starts")
         audio_features: Tensor = self._get_audio_features(mel)  # encoder forward pass
-        # print("Encoder finishes\n")
         tokens: Tensor = torch.tensor([self.initial_tokens]).repeat(n_audio, 1)
 
         # detect language if requested, overwriting the language token
@@ -789,10 +729,6 @@ class DecodingTask:
         tokens = tokens.repeat_interleave(self.n_group, dim=0).to(audio_features.device)
 
         # call the main sampling loop
-        # print(f"At this point we have the following tokens: {tokens}")
-        # print("According to the paper they correspond to: start-of-transcript, english language and transcribe task")
-        # print(f"Tokens before entering main loop: {tokens}")
-        # print(f"Audio feature shape before entering main loop: {audio_features.shape}")
         tokens, sum_logprobs, no_speech_probs = self._main_loop(audio_features, tokens)
 
         # reshape the tensors to have (n_audio, n_group) as the first two dimensions
@@ -805,17 +741,14 @@ class DecodingTask:
 
         # get the final candidates for each group, and slice between the first sampled token and EOT
         tokens, sum_logprobs = self.decoder.finalize(tokens, sum_logprobs)
-        # here we remove some of the technical tokens
         tokens: List[List[Tensor]] = [
             [t[self.sample_begin : (t == tokenizer.eot).nonzero()[0, 0]] for t in s]
             for s in tokens
         ]
 
         # select the top-ranked sample in each group
-        # I only seem to have 1 sample, that's why it doesn't do anything
         selected = self.sequence_ranker.rank(tokens, sum_logprobs)
         tokens: List[List[int]] = [t[i].tolist() for i, t in zip(selected, tokens)]
-        # this is where tokens are converted to text
         texts: List[str] = [tokenizer.decode(t).strip() for t in tokens]
 
         sum_logprobs: List[float] = [lp[i] for i, lp in zip(selected, sum_logprobs)]
@@ -877,15 +810,12 @@ def decode(
     result: Union[DecodingResult, List[DecodingResult]]
         The result(s) of decoding contained in `DecodingResult` dataclass instance(s)
     """
-    # JK: if mel is 2-dimensional, then add dummy dimension
     if single := mel.ndim == 2:
         mel = mel.unsqueeze(0)
 
     if kwargs:
         options = replace(options, **kwargs)
 
-    # JK: process mel segment
-    # print(f"Mel shape: {mel.shape}")
     result = DecodingTask(model, options).run(mel)
 
     return result[0] if single else result

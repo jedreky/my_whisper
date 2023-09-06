@@ -118,15 +118,8 @@ def transcribe(
         decode_options["fp16"] = False
 
     # Pad 30-seconds of silence to the input audio, for slicing
-    # JK: from audio compute log_mel_spectrogram
-    # print(f"N_SAMPLES: {N_SAMPLES}")
-    print(audio)
     mel = log_mel_spectrogram(audio, padding=N_SAMPLES)
-    # print(mel.shape)
     content_frames = mel.shape[-1] - N_FRAMES
-
-    # print(f"Language: {decode_options.get('language', None)}")
-
 
     if decode_options.get("language", None) is None:
         if not model.is_multilingual:
@@ -155,11 +148,9 @@ def transcribe(
         temperatures = (
             [temperature] if isinstance(temperature, (int, float)) else temperature
         )
-        # print(f"List of temperatures: {temperatures}")
         decode_result = None
 
         for t in temperatures:
-            # print(f"Current temperature: {t}")
             kwargs = {**decode_options}
             if t > 0:
                 # disable beam_size and patience when t > 0
@@ -170,7 +161,6 @@ def transcribe(
                 kwargs.pop("best_of", None)
 
             options = DecodingOptions(**kwargs, temperature=t)
-            # JK: decode mel segment
             decode_result = model.decode(segment, options)
 
             needs_fallback = False
@@ -233,24 +223,15 @@ def transcribe(
         total=content_frames, unit="frames", disable=verbose is not False
     ) as pbar:
         last_speech_timestamp = 0.0
-
         while seek < content_frames:
-            # print(f"Start while loop, current time: {seek}")
             time_offset = float(seek * HOP_LENGTH / SAMPLE_RATE)
-            # JK: get a single mel segment
             mel_segment = mel[:, seek : seek + N_FRAMES]
-            # print(f"Before trimming: {mel_segment.shape}")
             segment_size = min(N_FRAMES, content_frames - seek)
             segment_duration = segment_size * HOP_LENGTH / SAMPLE_RATE
-            # print(f"Current duration: {segment_size}, {segment_duration}")
             mel_segment = pad_or_trim(mel_segment, N_FRAMES).to(model.device).to(dtype)
-            # print(f"After trimming: {mel_segment.shape}")
 
             decode_options["prompt"] = all_tokens[prompt_reset_since:]
-            # JK: decode mel segment
-            # print("Decode current mel segment")
             result: DecodingResult = decode_with_fallback(mel_segment)
-            # this is where we get the output, all the code below just splits stuff into segments and other crap
             tokens = torch.tensor(result.tokens)
 
             if no_speech_threshold is not None:
