@@ -157,9 +157,11 @@ class PyTorchInference(Inference):
         if not self.kv_cache:
             self.kv_cache, self.hooks = self.model.install_kv_cache_hooks()
 
+        # print(f"Tokens shape in logits fn: {tokens.shape}")
         if tokens.shape[-1] > self.initial_token_length:
             # only need to use the last token except in the first forward pass
             tokens = tokens[:, -1:]
+            # print(f"Tokens shape in logits fn after truncation: {tokens.shape}")
 
         return self.model.decoder(tokens, audio_features, kv_cache=self.kv_cache)
 
@@ -669,7 +671,7 @@ class DecodingTask:
             audio_features = mel
         else:
             audio_features = self.model.encoder(mel)
-            print(f"Encoder: {mel.shape} -> {audio_features.shape}")
+            # print(f"Encoder: {mel.shape} -> {audio_features.shape}")
 
         if audio_features.dtype != (
             torch.float16 if self.options.fp16 else torch.float32
@@ -708,9 +710,9 @@ class DecodingTask:
                 # the code will figure out where we are in the audio and give us predictino for the first not-yet-predicted word
                 # I don't yet know what the shape of the audio feature means, but the audio feature is constant
                 # print(f"Iteration {i}, {audio_features.shape}")
-                print(f"Current tokens: {tokens}")
+                # print(f"Current tokens (inside loop in _main_loop): {tokens}")
                 logits = self.inference.logits(tokens, audio_features)
-                print(f"Logits shape: {logits.shape}")
+                # print(f"Logits shape returned from inference.logits: {logits.shape}")
 
                 if i == 0:
                     template = audio_features
@@ -727,9 +729,10 @@ class DecodingTask:
 
                 # now we need to consider the logits at the last token only
                 # this is where we see the probabilities!
+                tensor_list.append(logits.clone())
                 logits = logits[:, -1]
-                print(f"Logits final shape: {logits.shape}")
-                tensor_list.append(logits)
+                # print(f"Logits shape truncated to the last token: {logits.shape}")
+
                 # my_tokens = print_top_k(logits, k=10)
                 # comment = "These are top options:"
                 # for x in my_tokens:
@@ -738,6 +741,7 @@ class DecodingTask:
                 # print(comment)
 
                 # apply the logit filters, e.g. for suppressing or applying penalty to
+                # print(f"Apply filters, tokens: {tokens}, logits shape: {logits.shape}")
                 for logit_filter in self.logit_filters:
                     logit_filter.apply(logits, tokens)
 
@@ -749,7 +753,8 @@ class DecodingTask:
                     break
         finally:
             self.inference.cleanup_caching()
-            full_tensor = torch.stack(tensor_list, dim=1)
+            full_tensor = torch.cat(tensor_list, dim=1)
+            print(tokens)
             print(full_tensor.shape)
             torch.save(full_tensor, TMP_TENSOR_FILE)
 
@@ -762,8 +767,10 @@ class DecodingTask:
         n_audio: int = mel.shape[0]
 
         # JK: encoder forward pass, convert mel to audio_features
-        print(mel.shape)
+        # print(f"Mel shape inside run fn: {mel.shape}")
+        # print("\nEncoder starts")
         audio_features: Tensor = self._get_audio_features(mel)  # encoder forward pass
+        # print("Encoder finishes\n")
         tokens: Tensor = torch.tensor([self.initial_tokens]).repeat(n_audio, 1)
 
         # detect language if requested, overwriting the language token
@@ -784,6 +791,8 @@ class DecodingTask:
         # call the main sampling loop
         # print(f"At this point we have the following tokens: {tokens}")
         # print("According to the paper they correspond to: start-of-transcript, english language and transcribe task")
+        # print(f"Tokens before entering main loop: {tokens}")
+        # print(f"Audio feature shape before entering main loop: {audio_features.shape}")
         tokens, sum_logprobs, no_speech_probs = self._main_loop(audio_features, tokens)
 
         # reshape the tensors to have (n_audio, n_group) as the first two dimensions
@@ -876,7 +885,7 @@ def decode(
         options = replace(options, **kwargs)
 
     # JK: process mel segment
-    print(mel.shape)
+    # print(f"Mel shape: {mel.shape}")
     result = DecodingTask(model, options).run(mel)
 
     return result[0] if single else result

@@ -34,6 +34,8 @@ class LayerNorm(nn.LayerNorm):
 
 class Linear(nn.Linear):
     def forward(self, x: Tensor) -> Tensor:
+        # if x.shape == torch.Size([1, 1, 384]):
+        #     breakpoint()
         return F.linear(
             x,
             self.weight.to(x.dtype),
@@ -80,6 +82,10 @@ class MultiHeadAttention(nn.Module):
         mask: Optional[Tensor] = None,
         kv_cache: Optional[dict] = None,
     ):
+        # if x.shape[1] == 1:
+        #     breakpoint()
+        # if xa is not None:
+        #     breakpoint()
         # compute query vector
         q = self.query(x)
 
@@ -103,17 +109,24 @@ class MultiHeadAttention(nn.Module):
         # JK: this is where attention is computed
         n_batch, n_ctx, n_state = q.shape
         scale = (n_state // self.n_head) ** -0.25
+        # if mask is not None:
+        #     breakpoint()
         q = q.view(*q.shape[:2], self.n_head, -1).permute(0, 2, 1, 3) * scale
         k = k.view(*k.shape[:2], self.n_head, -1).permute(0, 2, 3, 1) * scale
         v = v.view(*v.shape[:2], self.n_head, -1).permute(0, 2, 1, 3)
 
-        # print(f"Early shapes: {q.shape}, {k.shape}")
         qk = q @ k
-        # print(qk.shape)
+        # print(f"Early shapes, q: {q.shape},k: {k.shape}, v: {v.shape}")
+        # print(f"Shape after multiplication: {qk.shape}")
 
         if mask is not None:
             # print(f"Shapes: {qk.shape}, {mask.shape}, {n_ctx}")
+            qk_orig = qk.clone()
             qk = qk + mask[:n_ctx, :n_ctx]
+
+            # if not torch.equal(qk, qk_orig):
+            #     breakpoint()
+
         qk = qk.float()
 
         w = F.softmax(qk, dim=-1).to(q.dtype)
@@ -147,12 +160,16 @@ class ResidualAttentionBlock(nn.Module):
         mask: Optional[Tensor] = None,
         kv_cache: Optional[dict] = None,
     ):
+        # if xa is not None:
+        #     breakpoint()
+
+        # print(x.shape)
         x = x + self.attn(self.attn_ln(x), mask=mask, kv_cache=kv_cache)[0]
+        # print(x.shape)
 
         if self.cross_attn:
-            # breakpoint()
             x = x + self.cross_attn(self.cross_attn_ln(x), xa, kv_cache=kv_cache)[0]
-            # x = self.cross_attn(x, x, kv_cache=None)[0]
+            # print(x.shape)
 
         x = x + self.mlp(self.mlp_ln(x))
         return x
@@ -230,21 +247,21 @@ class TextDecoder(nn.Module):
         xa : torch.Tensor, shape = (batch_size, n_mels, n_audio_ctx)
             the encoded audio features to be attended on
         """
-        # breakpoint()
         # x is the just the last token, while xa is the audio_feature
-        print(f"Tokens (from inside forward): {x}, {x.shape}")
-
+        # print(f"Tokens (from inside TextDecoder.forward): {x}, {x.shape}")
         offset = next(iter(kv_cache.values())).shape[1] if kv_cache else 0
+        # print(f"Offset: {offset}")
 
         # here we compute token embeddings (embedding dimension is referred to as width in the paper dims)
         # and add to positional embeddings
 
+
         x = (
-            self.token_embedding(x)
-            + self.positional_embedding[offset : offset + x.shape[-1]]
+            self.token_embedding(x) + self.positional_embedding[offset : offset + x.shape[-1]]
         )
         # here ensure that x and xa have the same dtype
         x = x.to(xa.dtype)
+        # print(f"Shape after token and positional embedding: {x.shape}")
 
         # here we put it through all the blocks, I believe dimension stays the same
         orig_shape = x.shape
@@ -311,6 +328,7 @@ class Whisper(nn.Module):
         return self.encoder(mel)
 
     def logits(self, tokens: torch.Tensor, audio_features: torch.Tensor):
+        print(f"fn: logits, {tokens}, {audio_features.shape}")
         return self.decoder(tokens, audio_features)
 
     def forward(
@@ -349,6 +367,7 @@ class Whisper(nn.Module):
                 # save as-is, for the first token or cross attention
                 cache[module] = output
             else:
+                # concatenate for subsequent tokens in self-attention
                 cache[module] = torch.cat([cache[module], output], dim=1).detach()
             return cache[module]
 
@@ -359,7 +378,6 @@ class Whisper(nn.Module):
 
         self.decoder.apply(install_hooks)
         return cache, hooks
-
 
     detect_language = detect_language_function
     transcribe = transcribe_function
