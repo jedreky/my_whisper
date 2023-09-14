@@ -3,6 +3,8 @@ from functools import lru_cache
 from subprocess import CalledProcessError, run
 from typing import Optional, Union
 
+from pathlib import PosixPath
+
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -140,8 +142,8 @@ def log_mel_spectrogram(
     # 2. NumPy array -> then convert to torch.tensor
     # 3. a string -> first load to NumPy array and then convert to torch.tensor
     if not torch.is_tensor(audio):
-        if isinstance(audio, str):
-            audio = load_audio(audio)
+        if isinstance(audio, (str, PosixPath)):
+            audio = load_audio(str(audio))
         audio = torch.from_numpy(audio)
 
     # print("Audio shape before padding")
