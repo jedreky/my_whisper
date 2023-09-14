@@ -135,6 +135,10 @@ def log_mel_spectrogram(
     torch.Tensor, shape = (80, n_frames)
         A Tensor that contains the Mel spectrogram
     """
+    # Basically audio can be 3 things:
+    # 1. Torch tensor -> then do nothing
+    # 2. NumPy array -> then convert to torch.tensor
+    # 3. a string -> first load to NumPy array and then convert to torch.tensor
     if not torch.is_tensor(audio):
         if isinstance(audio, str):
             audio = load_audio(audio)
@@ -161,5 +165,4 @@ def log_mel_spectrogram(
     log_spec = torch.clamp(mel_spec, min=1e-10).log10()
     log_spec = torch.maximum(log_spec, log_spec.max() - 8.0)
     log_spec = (log_spec + 4.0) / 4.0
-    # print(log_spec.shape)
     return log_spec
