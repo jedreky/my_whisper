@@ -7,7 +7,7 @@ from typing import Dict, List, Optional, Tuple
 
 import tiktoken
 
-from src.paths import TMP_SPECIAL_TOKENS_FILE, TMP_STANDARD_TOKENS_FILE
+from src.dev.utils.paths import TMP_SPECIAL_TOKENS_FILE, TMP_STANDARD_TOKENS_FILE
 
 # JK: languages and abbreviations
 LANGUAGES = {

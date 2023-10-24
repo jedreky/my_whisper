@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from .model import Whisper
 
 
-from src.paths import TMP_TENSOR_FILE
+from src.dev.utils.paths import TMP_TENSOR_FILE
 
 
 @torch.no_grad()
